@@ -552,6 +552,7 @@ class auth extends \auth_plugin_base {
         if ($passive) {
             $params['ErrorURL'] = (new moodle_url('/login/index.php', ['saml' => 0]))->out(false);
         }
+        $params['AllowCreate'] = $this->config->allowcreate == 1;
 
         $auth = new \SimpleSAML\Auth\Simple($this->spname);
         // Redirect to IdP login page for authentication.
@@ -559,7 +560,8 @@ class auth extends \auth_plugin_base {
 
         // Complete login process.
         $attributes = $auth->getAttributes();
-        $this->saml_login_complete($attributes);
+        $nameid = $auth->getAuthData('saml:sp:NameID');
+        $this->saml_login_complete($attributes, $nameid);
     }
 
 
@@ -568,7 +570,7 @@ class auth extends \auth_plugin_base {
      *
      * This is split so we can handle SP and IdP first login flows.
      */
-    public function saml_login_complete($attributes) {
+    public function saml_login_complete($attributes, $nameid = null) {
         global $CFG, $DB, $USER, $SESSION;
 
         if ($this->config->attrsimple) {
@@ -576,7 +578,7 @@ class auth extends \auth_plugin_base {
         }
 
         $attr = $this->config->idpattr;
-        if (empty($attributes[$attr])) {
+        if (empty($attributes[$attr]) && $this->config->matchnameid != 1) {
             // Missing mapping IdP attribute. Login failed.
             $event = \core\event\user_login_failed::create(['other' => ['username' => 'unknown',
                 'reason' => AUTH_LOGIN_NOUSER]]);
@@ -594,14 +596,19 @@ class auth extends \auth_plugin_base {
 
         // Find Moodle user.
         $user = null;
-        foreach ($attributes[$attr] as $uid) {
-            if ($this->config->tolower) {
-                $this->log(__FUNCTION__ . " to lowercase for $uid");
-                $uid = strtolower($uid);
-            }
-            if ($user = get_complete_user_data($this->config->mdlattr, $uid)) {
-                // We found a user.
-                break;
+        if ($this->config->matchnameid) {
+            $uid = $nameid->value;
+            $user = $DB->get_record('user', array($this->config->mdlattr => $uid, 'deleted' => 0));
+        } else {
+            foreach ($attributes[$attr] as $uid) {
+                if ($this->config->tolower) {
+                    $this->log(__FUNCTION__ . " to lowercase for $uid");
+                    $uid = strtolower($uid);
+                }
+                if ($user = get_complete_user_data($this->config->mdlattr, $uid)) {
+                    // We found a user.
+                    break;
+                }
             }
         }
 
